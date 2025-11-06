@@ -1,0 +1,566 @@
+﻿# 备考复习 (Lecture/Tutorial) - Week 7
+
+你好！欢迎来到第七周的复习。本周的核心是金融时间序列分析中一个极其重要的工具：**GARCH模型**。这个模型专门用来解决金融资产收益率中一个普遍存在的现象——**波动率聚集 (Volatility Clustering)**。
+
+想象一下蜜雪东城的股价，你会发现它并非每天都以相同的幅度波动。在发布季度财报或有重大市场新闻时，股价可能会上蹿下跳，经历一段“高波动”时期；而在风平浪静的日子里，股价则可能波澜不惊，处于“低波动”时期。这种“平静的日子和动荡的日子总是扎堆出现”的现象，就是波动率聚集。传统的ARIMA模型能很好地预测收益率的均值，却对这种时变的波动性束手无策。而GARCH模型，正是为了捕捉和预测这种动态变化的方差（或波动率）而生。
+
+本周，我们将从理论到实践，全面拆解GARCH模型。你将学会如何识别波动率、如何构建和解读一个GARCH模型、如何诊断模型的好坏，以及如何利用它来预测未来的市场风险。
+
+---
+
+## 1. GARCH模型的核心思想 (The Core Idea of GARCH Models)
+
+在深入代码和公式之前，我们必须理解GARCH模型的两大基石：均值方程和方差方程。一个完整的**ARMA(r,m)-GARCH(p,q)**模型实际上是两个模型的结合体。
+
+### 1.1. 均值方程 (Mean Equation) - 预测收益率本身
+
+这部分我们很熟悉，它通常就是一个ARMA模型，用来描述收益率序列 `r_t` 的条件均值。我们本周接触的例子是一个`AR(2)`模型。
+
+*   **模型形式**:
+    $r_t = c + \phi_1 r_{t-1} + \phi_2 r_{t-2} + a_t$
+*   **解读**: 今天的收益率 (`r_t`)，可以由一个常数 `c`、昨天 (`r_{t-1}`) 和前天 (`r_{t-2}`) 的收益率，外加一个今天的“意外”或“新信息” (`a_t`) 来解释。
+*   **核心**: `a_t` 是模型的残差项，代表了无法被历史收益率解释的部分。在传统模型中，我们假设 `a_t` 的方差是恒定的，但在金融世界里，这个假设显然不成立。
+
+### 1.2. 方差方程 (Variance Equation) - 预测“意外”的波动幅度
+
+这才是GARCH模型的精髓。它不再假设 `a_t` 的方差是常数，而是认为这个方差是随时间变化的，并对其进行建模。`a_t` 可以被写成：
+
+$a_t = \sigma_t \epsilon_t$
+
+其中，`ε_t` 是一个标准的白噪声（通常假设为标准正态分布或t分布），而 `σ_t` 就是 `t` 时刻的**条件标准差 (Conditional Standard Deviation)**，它的平方 `σ_t^2` 则是**条件方差 (Conditional Variance)**。
+
+GARCH(p,q)模型正是为 `σ_t^2` 建立的动态模型：
+
+*   **模型形式 (以GARCH(1,1)为例)**:
+    $\sigma_t^2 = \omega + \alpha_1 a_{t-1}^2 + \beta_1 \sigma_{t-1}^2$
+*   **解读**: 这个公式是GARCH模型的心脏，我们来逐一拆解：
+    *   **`σ_t^2`**: 这是我们想要预测的，即**今天波动的幅度**。
+    *   **`ω` (omega)**: 一个常数项，代表长期的平均方差水平。
+    *   **`α_1 a_{t-1}^2` (ARCH项)**: `a_{t-1}^2` 是**昨天实际发生的“意外”的平方**。这捕捉了“波动率聚集”的直觉：如果昨天市场出现了剧烈震荡（`a_{t-1}^2` 很大），那么今天的波动 (`σ_t^2`) 也很可能会比较大。`α_1` (alpha) 控制了市场对“旧消息”的反应强度。
+    *   **`β_1 σ_{t-1}^2` (GARCH项)**: `σ_{t-1}^2` 是**我们昨天对波动幅度的预测**。这部分代表了波动的“惯性”或“记忆性”。如果昨天我们预测市场会剧烈波动，那么这个预期也会影响到我们对今天波动情况的判断。`β_1` (beta) 控制了这种惯性的强度。
+
+*   **举个例子**: 假设蜜雪东城昨天发布了超预期的财报，导致股价暴涨（`a_{t-1}^2` 很大，ARCH项生效）。同时，市场分析师普遍认为这种影响会持续一段时间（`σ_{t-1}^2` 也处于较高水平，GARCH项生效）。那么GARCH(1,1)模型就会综合这两个信息，预测今天蜜雪东城的股价波动 (`σ_t^2`) 依然会很大。
+
+### 1.3. 误差分布 (Error Distribution) - “意外”的形态
+
+金融收益率数据通常具有**尖峰厚尾 (Leptokurtosis)** 的特性，意味着极端事件（比如股价暴跌或暴涨）的发生概率比标准正态分布所预期的要高。
+
+*   **正态分布 (Normal/Gaussian Distribution)**: 这是最基础的假设，但往往低估了极端风险。
+*   **学生t分布 (Student's t-Distribution)**: t分布本身就具有厚尾特性，能更好地捕捉极端事件。它比正态分布多一个参数 `ν` (nu)，称为**自由度 (degrees of freedom)**。`ν` 越小，尾部越厚，对极端值的容纳度越高。当 `ν` 趋向于无穷大时，t分布就变成了正态分布。在实践中，使用t分布往往能让模型拟合得更好。
+
+---
+
+## 2. 案例实战：构建AR(2)-GARCH(1,1)-t模型 (Practical Guide)
+
+现在，我们以教程中的TLS公司日收益率数据为例，完整走一遍建模、解读和诊断的全过程。
+
+### 2.1. 步骤一：数据准备与探索 (Data Prep & Exploration)
+
+首先，我们加载数据并计算对数收益率。对数收益率在金融中被广泛使用，因为它具有良好的统计特性。
+
+*   **计算公式**:
+    $r_t = 100 \times (\ln(P_t) - \ln(P_{t-1}))$
+    其中 `P_t` 是今天的收盘价。
+
+通过绘制TLS的价格图和收益率图，我们可以直观地看到“波动率聚集”现象：收益率图在某些时期表现出剧烈的上下波动，而在其他时期则相对平稳。这为我们使用GARCH模型提供了初步的证据。
+
+### 2.2. 步骤二：模型设定与拟合 (Model Specification & Fitting)
+
+我们设定的模型是 **AR(2)-GARCH(1,1)**，并使用学生t分布来描述误差项。在Python的 `arch` 包中，这可以轻松实现。
+
+*   `mean='AR', lags=2`: 这定义了均值方程为一个AR(2)模型。
+*   `vol='GARCH', p=1, q=1`: 这定义了方差方程为一个GARCH(1,1)模型。
+*   `dist='StudentsT'`: 这指定了误差分布为学生t分布。
+
+### 2.3. 步骤三：解读模型输出 (Interpreting the Output)
+
+模型拟合后会生成一个复杂的参数表，这是我们分析的重点。
+
+| **部分** | **参数** | **教程中的估计值** | **P>|t| (P值)** | **解读与分析** |
+| :--- | :--- | :--- | :--- | :--- |
+| **均值模型** | `Const` | 0.0399 | 0.001 | 收益率的长期均值，显著不为零。 |
+| | `Close[1]` | -0.0180 | 0.181 | AR(1)项系数 `φ_1`，不显著。说明昨天的收益率对今天的影响不大。 |
+| | `Close[2]` | -0.0457 | 0.000 | AR(2)项系数 `φ_2`，**高度显著**。说明前天的收益率对今天的收益率有轻微的负向影响（虽然数值很小，但在统计上是显著的）。 |
+| **方差模型** | `omega` | 0.0549 | 0.028 | GARCH方差方程的常数项 `ω`，**显著**。 |
+| | `alpha[1]` | 0.0912 | 0.001 | ARCH项系数 `α_1`，**高度显著**。表明昨天的市场冲击（残差平方）对今天的波动率有显著的正向影响。 |
+| | `beta[1]` | 0.8738 | 0.000 | GARCH项系数 `β_1`，**高度显著**。表明昨天的预测方差对今天的波动率有非常强的持续性影响。 |
+| **分布** | `nu` | 5.4410 | 0.000 | 学生t分布的自由度 `ν`，**高度显著**。这个值远小于30，说明收益率分布确实存在显著的“厚尾”特性，使用t分布是正确的选择。 |
+
+**核心结论**:
+1.  **波动率的持续性 (Volatility Persistence)**: `α_1 + β_1 = 0.0912 + 0.8738 = 0.965`。这个值非常接近1，表明波动率的冲击具有高度的持续性。也就是说，一旦出现一个大的市场冲击，其对波动率的影响会持续很长一段时间才会消退。
+2.  **均值方程的影响较弱**: AR(2)项虽然显著，但其系数 `-0.0457` 的绝对值很小。这意味着模型的重点在于方差方程，均值上的自相关性很弱。这在金融收益率序列中非常常见。
+
+### I. 原创例题 (Original Example Question)
+
+1.  在GARCH(1,1)模型的方差方程 $\sigma_t^2 = \omega + \alpha_1 a_{t-1}^2 + \beta_1 \sigma_{t-1}^2$ 中，如果`β_1`系数接近于1，这主要暗示了什么？
+    A. 市场对新消息的反应非常剧烈。
+    B. 市场的长期平均波动率很高。
+    C. 市场的波动具有很强的记忆性或持续性。
+    D. 均值方程是不必要的。
+
+2.  一位分析师在使用GARCH模型分析蜜雪东城的股票收益率时，发现自由度参数`nu`的估计值为4.5且非常显著。这告诉我们关于蜜雪东城股票的什么信息？
+    A. 其日均收益率显著为正。
+    B. 股票价格波动完全是随机的。
+    C. 相比于正态分布，股价出现极端上涨或下跌的可能性更高。
+    D. 昨天的股价波动对今天没有影响。
+
+3.  如果一个AR(2)-GARCH(1,1)模型的`alpha[1]`参数的p值为0.35，我们应该得出什么结论？
+    A. 模型设定完全错误。
+    B. GARCH项是多余的，应该移除。
+    C. 没有足够的统计证据表明昨天的市场冲击会影响今天的波动率。
+    D. 均值方程的AR(2)项是显著的。
+
+4.  在TLS公司的模型结果中，`α_1 + β_1 = 0.965`。这个值的大小主要说明了什么？
+    A. 模型对数据的拟合非常好。
+    B. 波动率冲击的影响会很快消失。
+    C. 预测未来波动率时，最近的波动状况是非常重要的参考。
+    D. 收益率分布是正态的。
+
+5.  为什么在金融时间序列建模中，我们常常更倾向于使用学生t分布而不是正态分布来描述GARCH模型的误差项？
+    A. 因为t分布的计算更简单。
+    B. 因为t分布能够更好地捕捉金融市场中频繁发生的极端事件（厚尾现象）。
+    C. 因为t分布总是能保证`α_1 + β_1 < 1`。
+    D. 因为t分布要求数据必须是平稳的。
+
+### II. 解题思路 (Solution Walkthrough)
+
+1.  **C**. `β_1` (beta)衡量的是前一期的预测方差对当期预测方差的影响。一个接近1的`β_1`意味着昨天的方差水平在很大程度上会延续到今天，即波动具有很强的“惯性”或“记忆性”。A选项描述的是`α_1`的作用；B选项与`ω`有关；D选项与均值方程的系数有关。
+2.  **C**. 自由度`nu`衡量的是t分布的尾部厚度。一个较小且显著的`nu`值（通常认为小于30）是分布存在“厚尾”的强有力证据。厚尾意味着极端值（远离均值的值）出现的概率比正态分布所预测的要高得多。
+3.  **C**. P值为0.35远大于常规的显著性水平（如0.05）。这意味着我们不能拒绝“`alpha[1]`系数为零”的原假设。在模型语境下，这说明ARCH(1)效应不显著，即没有证据表明昨天的冲击 `a_{t-1}^2` 对今天的方差 `σ_t^2` 有预测能力。
+4.  **C**. `α_1 + β_1`的和衡量了波动率的持续性。一个接近1的值意味着当前波动率的冲击会持续很长时间。因此，在预测未来波动率时，最近的观察到的波动和预测的波动水平是极其重要的信息，因为它们的影响不会很快衰减。
+5.  **B**. 这是使用t分布的核心原因。金融资产收益率普遍存在“尖峰厚尾”现象，即大部分时间波动很小（尖峰），但偶尔会出现极端的波动（厚尾）。正态分布无法很好地描述这种现象，而t分布通过其自由度参数可以灵活地拟合这种厚尾特征。
+
+---
+内容较多，我将分段输出。以上是第一和第二部分，涵盖了GARCH模型的核心思想和模型构建解读。接下来我将继续讲解**模型诊断**部分，即如何评估我们建立的这个模型是否可靠。请问是否继续？
+
+好的，我们继续。
+
+在你精心构建了一个AR(2)-GARCH(1,1)-t模型之后，绝对不能直接拿去用。我们必须像一位严谨的侦探一样，对它进行全面的“背景调查”——这就是**模型诊断 (Model Diagnostics)**。我们的核心目标是：**检验模型的残差项是否表现得像理想中的“白噪声”**。
+
+如果我们的模型是成功的，它应该已经把数据中所有可预测的模式（均值上的自相关和方差上的动态变化）都“榨取”干净了。那么剩下的“残渣”——也就是模型的标准化残差——就应该是一组纯粹的、无聊的、没有任何规律可循的随机数。
+
+---
+
+## 3. 模型诊断：AR-GARCH-t模型是否可靠？(Assessing the AR-GARCH-t Model)
+
+在诊断之前，我们必须明确我们检查的对象是什么。我们检查的不是原始的残差 `a_t`，而是经过两步处理后的**标准化变换残差 (Standardised Transformed Residuals)**，在教程代码中它被命名为 `eg`。
+
+*   **第一步：标准化 (Standardization)**。用每期的残差 `a_t` 除以模型估计出的当期条件标准差 `σ_t`。这一步的目的是消除由GARCH模型捕捉到的时变方差。如果模型正确，标准化后的残差应该具有恒定的方差。
+*   **第二步：变换 (Transformation)**。由于我们假设原始误差服从t分布，我们使用概率积分变换（PIT）的方法，将这些t分布的标准化残差“扭转”成标准正态分布。这样做的好处是，我们可以使用一系列基于正态分布假设的成熟检验工具。
+
+所以，我们的所有诊断都围绕着一个核心问题：**这个 `eg` 序列，是否表现得像一个标准正态白噪声？** 一个理想的标准正态白噪声应该具备以下特征：
+1.  **无序列自相关** (No Serial Correlation)。
+2.  **服从标准正态分布** (Normally Distributed)。
+3.  **无条件异方差** (No Conditional Heteroskedasticity)，即波动是随机的，没有聚集现象。
+
+### 3.1. 检验一：是否存在残余的自相关？ (Checking for Remaining Serial Correlation)
+
+我们使用ACF图和Ljung-Box检验来检查 `eg` 序列本身。
+
+*   **ACF图分析**:
+    *   **我们期望看到什么？** 所有的自相关系数（蓝色竖线）都应该落在置信区间（蓝色区域，可以想象成“无罪推定”的范围）之内。
+    *   **教程中的发现**: ACF图看起来相当平坦，大部分滞后项都不显著，这表明我们的AR(2)模型已经很好地捕捉了均值上的自相关性。
+*   **Ljung-Box检验**:
+    *   **原假设 (H0)**: 序列不存在自相关。
+    *   **我们期望看到什么？** 我们希望P值很大（例如 > 0.05），这样我们就没有理由拒绝原假设，从而得出“残差中没有显著自相关”的结论。
+    *   **教程中的发现**: 教程中对 `eg` 进行了6、10、15阶的Ljung-Box检验，发现P值虽然在5%的水平上显著，但在1%的水平上不显著。这说明残差中可能还残留着一些**非常微弱**的、但在统计上勉强可辨的自相关性。不过，从ACF图和实际应用的角度看，这种微弱的相关性通常可以忽略不计，不构成对模型的主要威胁。
+
+### 3.2. 检验二：残差是否符合正态分布？ (Checking for Normality)
+
+现在我们检验 `eg` 是否真的像我们变换后所期望的那样，服从标准正态分布。
+
+*   **直方图 (Histogram) 和 QQ图 (QQ-Plot) 分析**:
+    *   **我们期望看到什么？** 直方图应该呈现出对称的钟形；QQ图中的数据点应该紧密地排列在红色的45度对角线周围。
+    *   **教程中的发现**: 直方图看起来大致呈钟形，QQ图的大部分点也都在线上。但是，QQ图的左端（代表负向的极端值）略微偏离了对角线，这暗示**左尾比标准正态分布要“更厚”一点**。这意味着即使我们用了t分布，模型可能仍未完全捕捉到极端负收益的全部特征。
+*   **雅克-贝拉检验 (Jarque-Bera Test)**:
+    *   **原假设 (H0)**: 数据服从正态分布。
+    *   **我们期望看到什么？** 和Ljung-Box检验一样，我们希望P值很大（> 0.05），这样才能支持残差服从正态分布的结论。
+    *   **教程中的发现**: JB统计量为3.928，对应的P值为**0.140**。这个P值大于0.05，因此我们**无法拒绝**原假设。结论是：尽管QQ图显示出一点小瑕疵，但从统计检验的角度来看，没有强有力的证据表明变换后的残差不是正态分布。模型的这个方面是合格的。
+
+### 3.3. 检验三：是否还有残余的ARCH效应？ (Checking for Remaining ARCH Effects)
+
+这是对GARCH模型**最关键**的诊断。我们必须检验，模型是否已经完全解释了波动率聚集现象。方法是检查**变换后残差的平方 (`eg**2`)** 是否还存在自相关。如果 `eg**2` 还有自相关，说明波动率中还有未被模型捕捉的模式。
+
+*   **`eg**2` **的ACF图分析**:
+    *   **我们期望看到什么？** 同样，所有的自相关系数都应该落在置信区间内。
+    *   **教程中的发现**: 这是一个**危险信号**。ACF图在滞后1阶（Lag 1）处有**非常显著**的尖峰，远远超出了置信区间。
+*   **`eg**2` **的Ljung-Box检验**:
+    *   **原假设 (H0)**: 平方序列不存在自相关。
+    *   **我们期望看到什么？** 同样是期望看到大的P值。
+    *   **教程中的发现**: 这是一个**红色警报**。对于10阶和15阶的检验，P值都极小（接近于0）。这为我们拒绝原假设提供了压倒性的证据。
+
+**诊断总览与最终结论**:
+我们的AR(2)-GARCH(1,1)-t模型在**均值方程**和**误差分布假设**上做得不错。然而，它在最核心的任务——**完全捕捉条件异方差**上失败了。`eg**2` 中显著的自相关性（即残余的ARCH效应）告诉我们，GARCH(1,1)的设定对于这个数据集来说可能**过于简单**了。市场波动的动态性比它能描述的要更复杂。
+
+此时，一个自然而然的下一步就是尝试更复杂的GARCH模型，比如增加`p`或`q`的阶数，尝试GARCH(1,2), GARCH(2,1), 甚至是GARCH(2,2)，然后重新进行这一整套诊断流程，直到找到一个能让 `eg` 和 `eg**2` 都表现得像白噪声的模型为止。
+
+### I. 原创例题 (Original Example Question)
+
+1.  在对一个GARCH模型进行诊断时，你发现变换后残差 `eg` 的Ljung-Box检验P值为0.45，而残差平方 `eg**2` 的Ljung-Box检验P值为0.001。这组结果说明了什么？
+    A. 模型完美，可以直接用于预测。
+    B. 均值方程（如AR模型）设定不当，但方差方程是充分的。
+    C. 均值方程的设定是充分的，但方差方程（GARCH部分）未能完全捕捉波动率的动态。
+    D. 模型残差不服从正态分布。
+
+2.  如果一个GARCH模型的QQ图显示，数据点在两端都显著高于红色的45度线，这通常意味着什么？
+    A. 数据的均值不为零。
+    B. 数据的分布比正态分布具有更厚的尾部（厚尾现象）。
+    C. 数据存在负相关。
+    D. 数据的方差是恒定的。
+
+3.  在评估GARCH模型时，为什么检查残差平方 (`eg**2`) 的ACF图比检查残差本身 (`eg`) 的ACF图更重要？
+    A. 因为 `eg**2` 总是正数，更容易分析。
+    B. `eg**2` 的ACF图专门用于检验波动率的自相关性，即ARCH效应，这是GARCH模型的核心目标。
+    C. `eg` 的ACF图只能用于ARIMA模型，不适用于GARCH。
+    D. `eg**2` 的ACF图可以帮助我们确定误差分布是正态分布还是t分布。
+
+4.  假设你对一个GARCH模型的变换后残差进行了Jarque-Bera检验，得到的P值为0.02。你应该如何解读这个结果？
+    A. 这是一个好结果，表明残差中没有自相关。
+    B. 这是一个好结果，表明模型成功捕捉了ARCH效应。
+    C. 这是一个坏结果，它拒绝了残差服从正态分布的假设，说明模型设定或误差分布选择可能存在问题。
+    D. 这是一个坏结果，表明均值方程需要更高阶的AR或MA项。
+
+5.  如果你的GARCH(1,1)模型诊断显示有显著的残余ARCH效应，以下哪个是**最不**合理的下一步？
+    A. 尝试拟合一个GARCH(2,1)或GARCH(1,2)模型。
+    B. 检查数据中是否有异常值或结构性断点，可能影响了模型拟合。
+    C. 放弃GARCH模型，转而使用一个简单的AR(3)模型。
+    D. 尝试使用其他类型的GARCH模型，如EGARCH或GJR-GARCH，来捕捉非对称性效应。
+
+### II. 解题思路 (Solution Walkthrough)
+
+1.  **C**. `eg` 的Ljung-Box检验P值很高（0.45 > 0.05），说明残差本身没有显著的自相关，这意味着均值方程（如AR模型）是充分的。`eg**2` 的Ljung-Box检验P值极低（0.001 < 0.05），说明残差的平方序列存在显著的自相关，即还有残余的ARCH效应未被捕捉。这直指方差方程的不足。
+2.  **B**. QQ图中，横轴是理论分位数，纵轴是样本分位数。当数据点在两端（代表极端值）高于对角线时，意味着样本中的极端值比理论正态分布中的极端值要大（离中心更远）。这正是厚尾分布的典型特征。
+3.  **B**. GARCH模型的核心任务就是对波动率（方差）进行建模。残差的平方是方差的一个代理。因此，检查 `eg**2` 的自相关性，就是在直接检验GARCH模型是否成功完成了它的核心任务——消除波动率中的可预测模式（ARCH效应）。
+4.  **C**. Jarque-Bera检验的原假设是数据服从正态分布。P值为0.02，在5%的显著性水平下是显著的，因此我们拒绝原假设。这意味着，即使我们可能已经进行了变换，最终的残差仍然不符合正态分布的特征，暗示模型存在问题。
+5.  **C**. 诊断结果明确指出了问题出在**方差方程**上。A、B、D都是处理方差方程设定不足或数据复杂性的合理尝试。而C选项，即用一个AR(3)模型替代，是完全错误的，因为AR模型只处理均值，完全无法解决GARCH模型要处理的核心问题——时变波动率。这是答非所问。
+
+---
+以上是关于模型诊断的精讲。接下来，我将继续讲解最后一部分：**波动率代理、模型预测性能评估以及ARCH/GARCH模型的理论预测公式**。是否继续？
+
+好的，我们进入最后一部分的学习。在这一部分，我们将把模型从“解释过去”推向“预测未来”，并学习如何科学地评估它的预测能力。
+
+---
+
+## 4. 波动率代理：如何衡量看不见的“真实波动”？(Volatility Proxies: Measuring the Unseen)
+
+这是进入预测评估前必须解决的一个核心难题：**我们无法直接观测到“真实”的日波动率**。
+
+GARCH模型预测的是 `σ_{t+1}^2`，即明天收益率的条件方差。为了评估这个预测的准确性，我们需要将它与明天“实际发生”的方差进行比较。可问题是，一天只有一个收益率观测值，我们如何从中得知当天的“真实”方差呢？
+
+答案是，我们无法得到绝对的真实值，但我们可以使用**波动率代理 (Volatility Proxies)** 来作为“真实”方差的**最佳估计**。一个好的代理应该能比简单地使用收益率平方（`r_t^2`）更准确、噪音更小地反映当天的波动情况。
+
+教程中介绍了几个常用的波动率代理：
+
+### 4.1. 代理1：平方收益率 (Squared Returns)
+
+*   **公式**: `proxy1 = (r_t - μ)^2` (通常用 demeaned returns，即减去均值的收益率)
+*   **优点**: 计算最简单，最直观。
+*   **缺点**: 噪音非常大。一天的收益率可能因为某个偶然的大单交易而变得很大，但这并不完全代表这一整天的波动水平都很高。
+
+### 4.2. 代理2：基于日内高低价差 (High-Low Range)
+
+*   **公式**: `proxy2 = C * (log(High_t) - log(Low_t))^2` (C是一个常数)
+*   **优点**: 利用了日内高点和低点的信息，比只用收盘价计算的收益率包含了更多关于波动的信息，因此通常是比代理1更好的估计。
+*   **逻辑**: 一天的最高价和最低价之间的差距越大，直观上当天的波动就越剧烈。
+
+### 4.3. 更复杂的代理 (More Sophisticated Proxies)
+
+教程中还提到了`proxy3`和`proxy4`，它们是结合了**日内高低价差**和**隔夜跳空**（即今天的开盘价相对于昨天收盘价的变化）等更多信息的更高级的估计量。我们无需深究其复杂公式，只需理解：
+
+**核心思想**：通过利用一天中更多的价格信息（开盘价、最高价、最低价、收盘价），我们可以得到一个比简单平方收益率更精确、更稳健的“当日真实波动率”的估计值。
+
+在接下来的模型评估中，这些代理将扮演“事实标准”或“裁判”的角色。
+
+---
+
+## 5. 样本外预测与评估 (Out-of-Sample Forecasting & Evaluation)
+
+一个模型在样本内拟合得再好，也可能只是“死记硬背”了历史数据。它真正的价值在于对**未知未来**的预测能力。这就是样本外预测评估的目的。
+
+### 5.1. 评估方法：拓展窗口法 (Expanding Window)
+
+教程中使用了一种非常贴近实际应用的评估方法：**拓展窗口法**。
+
+想象一下你是一个在2021年11月26日工作的分析师，你要预测第二天的波动率。
+
+1.  **第一步 (预测第1天)**:
+    *   你使用从2000年1月到2021年11月26日的所有历史数据，训练一个AR-GARCH模型。
+    *   基于这个模型，你做出一个对**2021年11月27日**波动率的1步预测。
+    *   到了27日收盘，你计算出当天的波动率代理（比如`proxy2`）。
+    *   你将你的预测值与这个代理值进行比较，记录下预测误差。
+
+2.  **第二步 (预测第2天)**:
+    *   现在时间到了27日收-盘后，你把这一天的新数据也纳入你的数据库。
+    *   你使用从2000年1月到**2021年11月27日**的所有数据，**重新训练**你的AR-GARCH模型。
+    *   基于这个更新后的模型，你做出一个对**2021年11月28日**波动率的1步预测。
+    *   记录误差...
+
+3.  **循环往复**: 你不断地将最新的数据点加入训练集，重新估计模型，并进行下一步的预测。教程中这个过程重复了200次，覆盖了最后200天的数据作为评估期。
+
+这种方法模拟了现实世界中我们如何利用所有可得信息来持续更新我们的预测。
+
+### 5.2. 评估指标：均方根误差 (RMSE)
+
+在收集了200个预测误差后，我们用**均方根误差 (Root Mean Squared Error, RMSE)** 来衡量模型的整体预测精度。
+
+*   **公式**: $RMSE = \sqrt{\frac{1}{N}\sum_{i=1}^{N}(\text{Forecast}_i - \text{Proxy}_i)^2}$
+*   **解读**: RMSE的值越小，说明模型的预测值与“事实标准”（波动率代理）越接近，模型的预测性能越好。
+
+### 5.3. 关键发现：t分布 vs. 正态分布
+
+教程进行了一场“模型对决”：用AR-GARCH-t模型和AR-GARCH-Normal模型分别进行上述的拓展窗口预测，然后比较它们的RMSE。
+
+*   **结果**: 对于**所有四种**波动率代理，**AR-GARCH-t模型的RMSE都低于AR-GARCH-Normal模型**。
+*   **结论**: 这个结果非常有说服力。它表明，在模型设定中正确地描述了数据的厚尾特性（使用t分布），不仅仅能让模型在样本内拟合得更好，更重要的是，它能**显著提升模型在样本外的预测能力**。一个更贴近现实的假设，会带来更准确的预测。
+
+---
+
+## 6. 理论视角：ARCH与GARCH的预测公式推导 (Theoretical Variance Forecasting)
+
+这部分内容更偏向理论，但它能帮助我们深刻理解GARCH模型是如何形成对未来的预期的。我们以 `F_t` 代表截止到 `t` 时刻所有已知的信息。
+
+### 6.1. ARCH(1)模型的方差预测
+
+*   **模型**: $\sigma_t^2 = \omega + \alpha_1 a_{t-1}^2$
+*   **1步预测 (Forecast for `t+1`)**: 我们要求的是 $E[\sigma_{t+1}^2 | F_t]$
+    $E[\sigma_{t+1}^2 | F_t] = E[\omega + \alpha_1 a_t^2 | F_t]$
+    在 `t` 时刻，`ω`、`α_1` 和 `a_t^2` (今天的冲击) 都是已知的。因此，对已知信息的期望就是它本身。
+    $\sigma_{t+1|t}^2 = \omega + \alpha_1 a_t^2$
+*   **2步预测 (Forecast for `t+2`)**: 我们要求的是 $E[\sigma_{t+2}^2 | F_t]$
+    $E[\sigma_{t+2}^2 | F_t] = E[\omega + \alpha_1 a_{t+1}^2 | F_t] = \omega + \alpha_1 E[a_{t+1}^2 | F_t]$
+    这里的关键是 $E[a_{t+1}^2 | F_t]$。根据定义，在 `t` 时刻对 `t+1` 时刻残差平方的期望，正是 `t+1` 时刻的条件方差预测值，即 $\sigma_{t+1|t}^2$。
+    $\sigma_{t+2|t}^2 = \omega + \alpha_1 \sigma_{t+1|t}^2$
+
+### 6.2. GARCH(1,1)模型的方差预测
+
+*   **模型**: $\sigma_t^2 = \omega + \alpha_1 a_{t-1}^2 + \beta_1 \sigma_{t-1}^2$
+*   **1步预测**:
+    $E[\sigma_{t+1}^2 | F_t] = E[\omega + \alpha_1 a_t^2 + \beta_1 \sigma_t^2 | F_t]$
+    同样，在 `t` 时刻，右边的所有项（`ω`, `α_1`, `a_t^2`, `β_1`, `σ_t^2`）都是已知的。
+    $\sigma_{t+1|t}^2 = \omega + \alpha_1 a_t^2 + \beta_1 \sigma_t^2$
+*   **2步预测**:
+    $E[\sigma_{t+2}^2 | F_t] = E[\omega + \alpha_1 a_{t+1}^2 + \beta_1 \sigma_{t+1}^2 | F_t]$
+    $E[\sigma_{t+2}^2 | F_t] = \omega + \alpha_1 E[a_{t+1}^2 | F_t] + \beta_1 E[\sigma_{t+1}^2 | F_t]$
+    我们再次使用 $E[a_{t+1}^2 | F_t] = E[\sigma_{t+1}^2 | F_t] = \sigma_{t+1|t}^2$ 这个关系。
+    $\sigma_{t+2|t}^2 = \omega + \alpha_1 \sigma_{t+1|t}^2 + \beta_1 \sigma_{t+1|t}^2 = \omega + (\alpha_1 + \beta_1)\sigma_{t+1|t}^2$
+
+**推导的启示**:
+这个2步预测公式清晰地揭示了**波动率持续性 (`α_1 + β_1`)** 的作用。它告诉我们，对更遥远未来的预测，是如何依赖于我们对近期的预测以及这个持续性参数的。如果 `α_1 + β_1` 很接近1，那么今天的波动状况对未来很长一段时间的预测都有着举足轻重的影响。
+
+### I. 原创例题 (Original Example Question)
+
+1.  在评估GARCH模型的波动率预测性能时，为什么分析师通常更喜欢使用基于日内高低价差的代理（Proxy 2），而不是简单的平方收益率（Proxy 1）？
+    A. 因为平方收益率总是负数。
+    B. 因为日内高低价差包含了更多关于当天波动的信息，作为“真实波动率”的估计值噪音更小。
+    C. 因为平方收益率的计算更复杂。
+    D. 因为只有日内高低价差才能用于t分布的模型。
+
+2.  拓展窗口预测方法的主要优点是什么？
+    A. 它的计算速度最快，因为模型只估计一次。
+    B. 它能保证预测误差永远为零。
+    C. 它模拟了现实情况，即预测者会利用所有截至当前时刻的最新信息来更新模型和预测。
+    D. 它只适用于AR模型，不适用于GARCH模型。
+
+3.  假设你用两个模型（模型A和模型B）对蜜雪东城的未来200天波动率进行预测，并使用同一个波动率代理计算RMSE。如果模型A的RMSE是0.75，模型B的RMSE是0.68，你应该得出什么结论？
+    A. 两个模型都不可用。
+    B. 模型A的样本外预测性能优于模型B。
+    C. 模型B的样本外预测性能优于模型A。
+    D. 需要计算R-squared才能判断。
+
+4.  根据GARCH(1,1)的2步预测公式 $\sigma_{t+2|t}^2 = \omega + (\alpha_1 + \beta_1)\sigma_{t+1|t}^2$，如果一个模型的波动率持续性 `α_1 + β_1` 非常高（例如0.99），这对于波动率预测意味着什么？
+    A. 波动率的预测会非常快地回归到其长期均值。
+    B. 今天的波动冲击（shock）对未来波动率的影响会迅速消失。
+    C. 今天的波动冲击对未来波动率的影响会持续很长一段时间。
+    D. 模型中的常数项 `ω` 是不重要的。
+
+5.  假设一个GARCH(1,1)模型的参数为：`ω`=0.05, `α_1`=0.10, `β_1`=0.85。在 `t` 时刻，你观测到 `a_t^2` = 0.5，并且模型给出的当期方差估计 `σ_t^2` = 0.4。请计算1步和2步 ahead的方差预测值。
+    A. $\sigma_{t+1|t}^2 = 0.44$, $\sigma_{t+2|t}^2 = 0.468$
+    B. $\sigma_{t+1|t}^2 = 0.50$, $\sigma_{t+2|t}^2 = 0.525$
+    C. $\sigma_{t+1|t}^2 = 0.44$, $\sigma_{t+2|t}^2 = 0.473$
+    D. $\sigma_{t+1|t}^2 = 0.40$, $\sigma_{t+2|t}^2 = 0.430$
+
+### II. 解题思路 (Solution Walkthrough)
+
+1.  **B**. 核心在于信息的质量。日内高低价差反映了交易日全天的价格活动范围，而收盘价计算的收益率只是两个时间点的快照。因此，前者能提供一个更稳健、噪音更小的波动率估计。
+2.  **C**. 这正是拓展窗口法的精髓。它不像固定窗口（只用最早的一段数据）或滚动窗口（窗口大小不变但向前移动），而是不断地将新信息吸纳进来，使模型始终基于最全的历史数据进行预测，最符合实际决策过程。
+3.  **C**. RMSE是误差的衡量标准，值越低越好。模型B的RMSE（0.68）低于模型A的RMSE（0.75），明确表明模型B的预测更接近“事实标准”，因此其样本外预测性能更优。
+4.  **C**. `α_1 + β_1` 衡量了冲击的持续性。一个接近1的值意味着当前方差水平 `σ_{t+1|t}^2` 的权重在下一步预测中非常大，其影响会缓慢衰减。因此，冲击的影响会持续很长时间。相反，如果这个值很小，预测会很快地向长期均值 `ω/(1-α-β)` 回归。
+5.  **A**.
+    *   **1步预测**: 使用公式 $\sigma_{t+1|t}^2 = \omega + \alpha_1 a_t^2 + \beta_1 \sigma_t^2$
+        $\sigma_{t+1|t}^2 = 0.05 + 0.10 \times 0.5 + 0.85 \times 0.4 = 0.05 + 0.05 + 0.34 = 0.44$
+    *   **2步预测**: 使用公式 $\sigma_{t+2|t}^2 = \omega + (\alpha_1 + \beta_1)\sigma_{t+1|t}^2$
+        $\alpha_1 + \beta_1 = 0.10 + 0.85 = 0.95$
+        $\sigma_{t+2|t}^2 = 0.05 + (0.95) \times 0.44 = 0.05 + 0.418 = 0.468$
+
+---
+至此，我们已经完成了对第七周GARCH模型所有核心内容的精讲。希望这份备考复习材料能帮助你建立一个清晰、系统、且深入的知识框架。祝你学习顺利！
+
+好的，遵照您的指示，我将继续生成练习题与答案。
+
+经过分析，您提供的学习材料主要由代码、输出和解释构成，末尾包含两个理论推导任务 (Task a, b)，但**不包含**任何形式的练习题（如选择题、计算题等）。因此，我将直接进入“情况二”的流程，为您创作一套全新的、全面的原创练习题。
+
+## B. 更多练习题 (More Practice Questions)
+
+Here are 15 original practice questions designed to cover the full spectrum of Week 7's topics on GARCH models. They range from conceptual understanding to practical calculations and model diagnostics.
+
+1.  In a standard GARCH(1,1) model, what is the primary role of the `omega` (ω) parameter?
+    A) To capture the impact of last period's shock.
+    B) To ensure the variance forecast is always positive.
+    C) It represents the long-run average variance to which the model reverts.
+    D) To measure the persistence of volatility shocks.
+
+2.  If you fit a GARCH(1,1) model and find that `alpha[1]` + `beta[1]` > 1, what is the main implication for your variance process?
+    A) The model is misspecified, but still useful for short-term forecasting.
+    B) The variance process is non-stationary and has an explosive path.
+    C) The model will predict that volatility always decreases.
+    D) This indicates the presence of a leverage effect.
+
+3.  An analyst fits an AR(1)-GARCH(1,1) model. Upon examining the standardized residuals, she finds that the Ljung-Box test on the residuals themselves has a p-value of 0.58, but the Ljung-Box test on the squared standardized residuals has a p-value of 0.002. What should she conclude?
+    A) The AR(1) part of the model is inadequate, but the GARCH(1,1) part is fine.
+    B) The model is perfectly specified.
+    C) The GARCH(1,1) specification is insufficient to capture all the volatility clustering.
+    D) The residuals do not follow the assumed distribution (e.g., Student's t).
+
+4.  Which of the following is the most significant advantage of using the Student's t-distribution over the Normal distribution for the innovations in a GARCH model?
+    A) It simplifies the calculation of variance forecasts.
+    B) It better accounts for the skewness often found in financial returns.
+    C) It can better capture the "fat-tails" (leptokurtosis) observed in financial data.
+    D) It guarantees that the sum of the ARCH and GARCH parameters is less than 1.
+
+5.  You have built a GARCH(1,1) model for a stock's returns. The estimated parameters are ω=0.1, α₁=0.05, and β₁=0.90. At time `t`, the squared residual is `a_t^2` = 4 and the conditional variance is `σ_t^2` = 2. What is the one-step-ahead forecast for the conditional variance, `σ_{t+1|t}^2`?
+    A) 2.10
+    B) 2.15
+    C) 1.85
+    D) 2.05
+
+6.  Following up on Question 5, what would be the two-steps-ahead forecast for the conditional variance, `σ_{t+2|t}^2`?
+    A) 2.095
+    B) 2.145
+    C) 1.995
+    D) 2.210
+
+7.  When evaluating the out-of-sample forecast performance of two competing GARCH models (Model X and Model Y), you calculate their Root Mean Squared Error (RMSE) against a reliable volatility proxy. If Model X has an RMSE of 1.25 and Model Y has an RMSE of 1.18, what does this imply?
+    A) Model X provides statistically more significant parameters.
+    B) Model Y demonstrates superior out-of-sample forecasting accuracy.
+    C) Both models are equally poor at forecasting.
+    D) Model X is better because its error is larger, indicating it captures more volatility.
+
+8.  What is the fundamental difference between an ARCH(q) model and a GARCH(p,q) model?
+    A) GARCH models can have an ARMA component in the mean equation, while ARCH models cannot.
+    B) GARCH models include lagged conditional variance terms (`σ_{t-p}^2`), while ARCH models only use past squared residuals (`a_{t-q}^2`).
+    C) ARCH models are only for daily data, while GARCH can be used for any frequency.
+    D) ARCH models assume a Normal distribution, while GARCH models assume a Student's t-distribution.
+
+9.  A researcher plots a QQ-plot of the standardized transformed residuals from their GARCH model. The points form a perfect straight 45-degree line. What does this visually confirm?
+    A) The absence of any remaining ARCH effects.
+    B) The absence of serial correlation in the mean.
+    C) That the standardized transformed residuals are consistent with a standard Normal distribution.
+    D) That the volatility persistence is very high.
+
+10. The `arch_model` package in Python is used to fit a model with the specification `mean='AR', lags=3, vol='GARCH', p=2, q=1`. Which model is being estimated?
+    A) AR(3)-GARCH(1,2)
+    B) ARMA(3,0)-GARCH(2,1)
+    C) AR(3)-ARCH(2)
+    D) AR(3)-GARCH(2,1)
+
+11. Why is the Parkinson number (based on high-low prices) often considered a more efficient volatility proxy than squared returns?
+    A) Because it is easier to calculate.
+    B) Because it incorporates more information about the price movements within a trading period.
+    C) Because it is always a smaller value than squared returns.
+    D) Because it is not affected by overnight price gaps.
+
+12. If a GARCH(1,1) model for蜜雪东城's daily returns has a very high persistence (`α₁`+`β₁` = 0.995), what does this imply about a major market shock that occurs today?
+    A) The shock will increase volatility, but the effect will completely vanish by the next day.
+    B) The shock's impact on volatility will be extremely persistent and will decay very slowly over many future periods.
+    C) The model will likely become unstable and produce negative variance forecasts.
+    D) The mean return for the stock will permanently shift downwards.
+
+13. A Jarque-Bera test on the standardized transformed residuals of a GARCH model yields a test statistic of 1.5 with a p-value of 0.47. What is the correct interpretation?
+    A) There is strong evidence of remaining conditional heteroskedasticity.
+    B) The residuals are not normally distributed, and the model is misspecified.
+    C) The mean equation needs to include more AR terms.
+    D) There is no statistical evidence to reject the null hypothesis of normality for the transformed residuals.
+
+14. Consider a simple ARCH(1) model: `σ_t^2` = 0.2 + 0.8`a_{t-1}^2`. If the squared residual yesterday was `a_{t-1}^2` = 1.5, what is the conditional variance forecast for today (`σ_t^2`)?
+    A) 1.2
+    B) 1.4
+    C) 1.0
+    D) 1.6
+
+15. When using an expanding window approach for out-of-sample forecasting, what happens at each step of the evaluation loop?
+    A) The model parameters are kept fixed, and only the new data point is used for prediction.
+    B) The oldest data point is dropped, and the newest one is added to keep the sample size constant.
+    C) The model is completely re-estimated using all historical data up to and including the most recent data point.
+    D) A different GARCH model specification is chosen at each step.
+
+---
+
+## C. 练习题答案 (Practice Question Answers)
+
+1.  **问题**：GARCH(1,1)中`ω`参数的作用。
+    *   **答案**：C
+    *   **解析**：`ω` (omega) 是方差方程中的常数项。模型预测的长期平均方差（unconditional variance）等于 `ω / (1 - α - β)`。因此，`ω`是驱动模型向其长期均值回归的基础，代表了长期的平均波动水平。
+
+2.  **问题**：`α + β > 1`的影响。
+    *   **答案**：B
+    *   **解析**：`α + β`之和代表波动率的持续性。当这个和小于1时，方差过程是平稳的，冲击的影响会随时间衰减。当它等于1时，称为IGARCH模型，冲击是永久性的。当它大于1时，方差过程是**非平稳的**，这意味着任何冲击都会被放大，导致方差预测呈爆炸性增长，这在金融实践中是不现实的。
+
+3.  **问题**：残差ACF不显著，但平方残差ACF显著。
+    *   **答案**：C
+    *   **解析**：残差本身的Ljung-Box检验（p=0.58）不显著，说明均值方程（AR(1)部分）已经充分捕捉了序列的自相关性。然而，平方残差的Ljung-Box检验（p=0.002）高度显著，这直接表明波动率中还存在未被模型捕捉的自相关性，即**残余的ARCH效应**。结论是GARCH(1,1)的设定不足。
+
+4.  **问题**：使用t分布相对于正态分布的优势。
+    *   **答案**：C
+    *   **解析**：金融收益率数据最显著的特征之一就是**尖峰厚尾 (Leptokurtosis)**，即极端事件（大涨或大跌）的发生频率远高于正态分布的预测。学生t分布本身就具有“厚尾”特性，能更好地拟合这种现象，从而提供更准确的风险度量和模型设定。
+
+5.  **问题**：计算1步GARCH方差预测。
+    *   **答案**：A
+    *   **解析**：使用1步预测公式: $\sigma_{t+1|t}^2 = \omega + \alpha_1 a_t^2 + \beta_1 \sigma_t^2$。
+        代入数值: $\sigma_{t+1|t}^2 = 0.1 + (0.05 \times 4) + (0.90 \times 2) = 0.1 + 0.2 + 1.8 = 2.10$。
+
+6.  **问题**：计算2步GARCH方差预测。
+    *   **答案**：B
+    *   **解析**：使用2步预测公式: $\sigma_{t+2|t}^2 = \omega + (\alpha_1 + \beta_1)\sigma_{t+1|t}^2$。
+        首先计算持续性: $\alpha_1 + \beta_1 = 0.05 + 0.90 = 0.95$。
+        然后代入上一步计算出的1步预测值: $\sigma_{t+2|t}^2 = 0.1 + (0.95 \times 2.10) = 0.1 + 1.995 = 2.095$。
+        (注：此处选项B为2.145，A为2.095，根据计算结果应为A。这可能是一个题目设置的陷阱或错误，但根据公式推导，2.095是正确答案。我将选择最接近的计算结果并指出这一点)
+        **更正**: 让我们重新检查计算：$0.1 + (0.95 \times 2.10) = 0.1 + 1.995 = 2.095$。选项A是正确答案。
+
+7.  **问题**：比较两个模型的RMSE。
+    *   **答案**：B
+    *   **解析**：RMSE（均方根误差）是衡量预测精度的指标，**值越小越好**。模型Y的RMSE（1.18）低于模型X的RMSE（1.25），说明模型Y的预测值整体上更接近于“真实”的波动率代理，因此其样本外预测表现更优。
+
+8.  **问题**：ARCH与GARCH的根本区别。
+    *   **答案**：B
+    *   **解析**：ARCH(q) (自回归条件异方差) 模型将当前的条件方差 `σ_t^2` 建模为过去 `q` 期**残差平方 `a_t^2`** 的函数。GARCH(p,q) (广义ARCH) 在此基础上进行了扩展，不仅包含了过去 `q` 期的残差平方（ARCH项），还包含了过去 `p` 期**条件方差自身 `σ_t^2`** 的滞后项（GARCH项）。这个GARCH项引入了波动的“惯性”。
+
+9.  **问题**：完美的QQ图意味着什么。
+    *   **答案**：C
+    *   **解析**：QQ图（Quantile-Quantile Plot）是用来在视觉上比较样本分位数和理论分位数的工具。当检验正态性时，如果样本数据（标准化变换残差）的分位数与标准正态分布的理论分位数完全一致，数据点就会落在一条完美的45度直线上。
+
+10. **问题**：识别 `arch_model` 包的模型设定。
+    *   **答案**：D
+    *   **解析**：`mean='AR', lags=3` 定义了均值方程为AR(3)模型。`vol='GARCH'` 指定了方差模型为GARCH类型。`p=2` 是GARCH项（滞后方差）的阶数，`q=1` 是ARCH项（滞后残差平方）的阶数。因此，整个模型是 **AR(3)-GARCH(2,1)**。
+
+11. **问题**：为何Parkinson数是更有效的波动率代理。
+    *   **答案**：B
+    *   **解析**：平方收益率只利用了收盘价这一个时点信息。而Parkinson数利用了日内最高价和最低价，这个**价格范围 (range)** 包含了更多关于当天价格波动路径和幅度的信息，因此它能更有效地估计当天的波动率，减少了仅使用单一价格点带来的噪音。
+
+12. **问题**：高波动率持续性的影响。
+    *   **答案**：B
+    *   **解析**：高持续性（`α₁`+`β₁` 接近1）意味着模型具有很强的“记忆性”。今天的任何冲击，其对未来波动率的影响权重会以非常缓慢的速度衰减。因此，这个冲击的影响将持续很长一段时间。
+
+13. **问题**：解读Jarque-Bera检验结果。
+    *   **答案**：D
+    *   **解析**：Jarque-Bera检验的原假设（H0）是数据服从正态分布。得到的p值为0.47，远大于常用的显著性水平（如0.05）。因此，我们**没有足够的证据拒绝原假设**。结论是，从这个检验来看，变换后的残差是符合正态分布的。
+
+14. **问题**：计算ARCH(1)方差预测。
+    *   **答案**：B
+    *   **解析**：直接将已知值代入ARCH(1)模型公式: $\sigma_t^2 = 0.2 + 0.8 \times a_{t-1}^2$。
+        $\sigma_t^2 = 0.2 + 0.8 \times 1.5 = 0.2 + 1.2 = 1.4$。
+
+15. **问题**：拓展窗口预测法的步骤。
+    *   **答案**：C
+    *   **解析**：拓展窗口（Expanding Window）的核心思想是，在每一步预测时，都利用**所有**已知的历史信息。当有一个新的数据点进来时，我们会将它加入到已有的历史数据集中，形成一个更大的训练集，然后基于这个更新后的、更大的数据集**重新估计**整个模型，再进行下一步的预测。
+
+
